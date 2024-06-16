@@ -305,11 +305,8 @@ else:
     ddp_world_size = 1
     master_process = True
     # attempt to autodetect device
-    device = "cpu"
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        device = "mps"
+    assert torch.cuda.is_available()
+    device = "cuda"
     print(f"using device: {device}")
 
 # added after video, pytorch can be serious about it's device vs. device_type distinction
@@ -322,7 +319,7 @@ if torch.cuda.is_available():
 enc = tiktoken.get_encoding("gpt2")
 
 total_batch_size = 524288 # 2**19, ~0.5M, in number of tokens
-B = 64 # micro batch size
+B = 32 # micro batch size
 T = 1024 # sequence length
 assert total_batch_size % (B * T * ddp_world_size) == 0, "make sure total_batch_size is divisible by B * T * ddp_world_size"
 grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
@@ -346,9 +343,9 @@ if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 raw_model = model.module if ddp else model # always contains the "raw" unwrapped model
 
-max_lr = 6e-4
+max_lr = 6e-4 * 3
 min_lr = max_lr * 0.1
-warmup_steps = 715
+warmup_steps = 100
 max_steps = 19073 # 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
 def get_lr(it):
     # 1) linear warmup for warmup_iters steps
@@ -397,7 +394,7 @@ for step in range(max_steps):
             print(f"validation loss: {val_loss_accum.item():.4f}")
             with open(log_file, "a") as f:
                 f.write(f"{step} val {val_loss_accum.item():.4f}\n")
-            if step > 0 and (step % 5000 == 0 or last_step):
+            if step > 0 and (step % 100 == 0 or last_step):
                 # optionally write model checkpoints
                 checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
                 checkpoint = {
@@ -411,7 +408,7 @@ for step in range(max_steps):
                 torch.save(checkpoint, checkpoint_path)
 
     # once in a while evaluate hellaswag
-    if (step % 250 == 0 or last_step) and (not use_compile):
+    if False and (step % 250 == 0 or last_step) and (not use_compile):
         num_correct_norm = 0
         num_total = 0
         for i, example in enumerate(iterate_examples("val")):
@@ -444,7 +441,7 @@ for step in range(max_steps):
                 f.write(f"{step} hella {acc_norm:.4f}\n")
 
     # once in a while generate from the model (except step 0, which is noise)
-    if ((step > 0 and step % 250 == 0) or last_step) and (not use_compile):
+    if ((step > 0 and step % 100 == 0) or last_step) and (not use_compile):
         model.eval()
         num_return_sequences = 4
         max_length = 32
